@@ -69,7 +69,7 @@ TRAIN_BATCH_SIZE=64       # Prompts per batch
 # NOTE: For Thinker-only mode, we use the thinker-only stage config.
 # This avoids loading Talker/Code2Wav on the inference GPU.
 ROLLOUT_NAME="vllm_omni"  # Triggers vLLM-Omni server (not standard vLLM)
-ROLLOUT_TP=2              # Tensor parallel for inference (2 GPU)
+ROLLOUT_TP=4              # Tensor parallel for inference (4 GPU)
 
 python3 -m verl.trainer.main_ppo \
     \
@@ -89,13 +89,14 @@ python3 -m verl.trainer.main_ppo \
     `# lora_rank/alpha: LoRA adapter configuration` \
     `# enable_gradient_checkpointing: save GPU memory (trade compute for memory)` \
     actor_rollout_ref.model.path="${MODEL_PATH}" \
+    +actor_rollout_ref.model.override_config.attn_implementation=sdpa \
     actor_rollout_ref.model.lora_rank=${LORA_RANK} \
     actor_rollout_ref.model.lora_alpha=${LORA_ALPHA} \
     actor_rollout_ref.model.target_modules="all-linear" \
     actor_rollout_ref.model.exclude_modules="${EXCLUDE_MODULES}" \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    +actor_rollout_ref.actor.freeze_vision_tower=True \
+    ++actor_rollout_ref.actor.freeze_vision_tower=True \
     \
     `# ═══ Actor (Training) Configuration ═══` \
     `# The actor trains LoRA weights using FSDP for distributed training.` \
@@ -113,8 +114,11 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0 \
+    actor_rollout_ref.actor.strategy=fsdp \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
+    actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
+    actor_rollout_ref.actor.fsdp_config.use_orig_params=True \
     \
     `# ═══ GSPO-Specific Loss Configuration ═══` \
     `# loss_mode=gspo: use sequence-level importance ratio (not per-token)` \
@@ -148,7 +152,10 @@ python3 -m verl.trainer.main_ppo \
     `# The frozen reference model computes ref_log_probs for KL penalty.` \
     `# Uses FSDP with param_offload to save GPU memory.` \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.ref.strategy=fsdp \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    actor_rollout_ref.ref.fsdp_config.model_dtype=bf16 \
+    actor_rollout_ref.ref.fsdp_config.use_orig_params=True \
     \
     `# ═══ Algorithm Configuration ═══` \
     `# adv_estimator=grpo: group-relative advantage (no critic)` \
@@ -170,7 +177,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='qwen3_omni_thinker_rl' \
     trainer.experiment_name='gspo_lora_gsm8k' \
-    trainer.n_gpus_per_node=2 \
+    trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.save_freq=20 \
     trainer.test_freq=5 \

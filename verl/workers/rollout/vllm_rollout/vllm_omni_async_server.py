@@ -29,7 +29,7 @@ from vllm_omni.outputs import OmniRequestOutput
 
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.tokenizer import normalize_token_ids
-from verl.workers.config import DiffusionModelConfig, DiffusionRolloutConfig
+from verl.workers.config import DiffusionModelConfig, DiffusionRolloutConfig, HFModelConfig, RolloutConfig
 from verl.workers.rollout.replica import DiffusionOutput
 from verl.workers.rollout.utils import run_uvicorn
 from verl.workers.rollout.vllm_rollout.utils import (
@@ -55,8 +55,8 @@ class vLLMOmniHttpServer(vLLMHttpServer):
     # -----------------------------------------------------------------------
 
     def _init_model_config(self, model_config):
-        """Use DiffusionModelConfig instead of HFModelConfig."""
-        return omega_conf_to_dataclass(model_config, dataclass_type=DiffusionModelConfig)
+        """Use HFModelConfig: Qwen3-Omni is an LLM, not a diffusion model."""
+        return omega_conf_to_dataclass(model_config, dataclass_type=HFModelConfig)
 
     def _validate_configs(self) -> None:
         """No-op: diffusion models don't have max_position_embeddings."""
@@ -251,8 +251,8 @@ class vLLMOmniReplica(vLLMReplica):
     def __init__(
         self,
         replica_rank: int,
-        config: DiffusionRolloutConfig,
-        model_config: DiffusionModelConfig,
+        config: RolloutConfig,
+        model_config: HFModelConfig,
         gpus_per_node: int = 8,
         is_reward_model: bool = False,
     ):

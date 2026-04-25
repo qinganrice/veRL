@@ -675,10 +675,44 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
 
 _architecture_to_auto_class = {
     "ForCausalLM": AutoModelForCausalLM,
+    "ForConditionalGeneration": AutoModelForCausalLM,
     "ForVision2Seq": AutoModelForVision2Seq,
     "ForTokenClassification": AutoModelForTokenClassification,
     "ForSequenceClassification": AutoModelForSequenceClassification,
 }
+
+# Register Qwen3-Omni Thinker in AutoModelForCausalLM so veRL's FSDP engine can load it.
+# Qwen3OmniMoe uses "ForConditionalGeneration" suffix but is a decoder-only causal LM.
+# We register the Thinker-only class since that's what we train in Thinker post-training.
+try:
+    from transformers.models.qwen3_omni_moe import (
+        Qwen3OmniMoeConfig,
+        Qwen3OmniMoeForConditionalGeneration,
+    )
+
+    def _qwen3_omni_get_input_embeddings(self):
+        return self.thinker.get_input_embeddings()
+
+    def _qwen3_omni_set_input_embeddings(self, value):
+        self.thinker.set_input_embeddings(value)
+
+    Qwen3OmniMoeForConditionalGeneration.get_input_embeddings = _qwen3_omni_get_input_embeddings
+    Qwen3OmniMoeForConditionalGeneration.set_input_embeddings = _qwen3_omni_set_input_embeddings
+    # Fix _no_split_modules: the full model incorrectly lists Qwen3OmniMoeDecoderLayer
+    # which doesn't exist; the actual Thinker decoder layer is Qwen3OmniMoeThinkerTextDecoderLayer.
+    Qwen3OmniMoeForConditionalGeneration._no_split_modules = ["Qwen3OmniMoeThinkerTextDecoderLayer"]
+    # Fix tie_word_embeddings: the full model config sets this to True, which forces
+    # all FSDP ranks to load on CPU (use_meta_tensor=False) and OOMs during FSDP init.
+    # Use a descriptor that returns False but has a no-op setter so config __init__ works.
+    class _FalseTieDescriptor:
+        def __get__(self, obj, objtype=None):
+            return False
+        def __set__(self, obj, value):
+            pass
+    Qwen3OmniMoeConfig.tie_word_embeddings = _FalseTieDescriptor()
+    AutoModelForCausalLM.register(Qwen3OmniMoeConfig, Qwen3OmniMoeForConditionalGeneration)
+except Exception:
+    pass
 
 
 def get_hf_auto_model_class(hf_config):
