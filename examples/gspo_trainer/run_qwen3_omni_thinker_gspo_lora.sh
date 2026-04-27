@@ -70,6 +70,8 @@ TRAIN_BATCH_SIZE=64       # Prompts per batch
 # This avoids loading Talker/Code2Wav on the inference GPU.
 ROLLOUT_NAME="vllm_omni"  # Triggers vLLM-Omni server (not standard vLLM)
 ROLLOUT_TP=4              # Tensor parallel for inference (4 GPU)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STAGE_CONFIG="${SCRIPT_DIR}/qwen3_omni_thinker_only.yaml"
 
 python3 -m verl.trainer.main_ppo \
     \
@@ -142,11 +144,13 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.top_p=0.9 \
     actor_rollout_ref.rollout.top_k=-1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=${ROLLOUT_TP} \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+    actor_rollout_ref.rollout.max_num_seqs=64 \
     actor_rollout_ref.rollout.calculate_log_probs=True \
     actor_rollout_ref.rollout.load_format=safetensors \
-    actor_rollout_ref.rollout.layered_summon=True \
+    actor_rollout_ref.rollout.layered_summon=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
+    ++actor_rollout_ref.rollout.engine_kwargs.vllm_omni.stage_configs_path="${STAGE_CONFIG}" \
     \
     `# ═══ Reference Model ═══` \
     `# The frozen reference model computes ref_log_probs for KL penalty.` \
@@ -174,7 +178,7 @@ python3 -m verl.trainer.main_ppo \
     `# total_epochs: number of passes through training data` \
     trainer.val_before_train=False \
     trainer.critic_warmup=0 \
-    trainer.logger='["console","wandb"]' \
+    trainer.logger='["console"]' \
     trainer.project_name='qwen3_omni_thinker_rl' \
     trainer.experiment_name='gspo_lora_gsm8k' \
     trainer.n_gpus_per_node=4 \

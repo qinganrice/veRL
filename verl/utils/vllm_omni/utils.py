@@ -22,6 +22,7 @@ except ImportError:
 
 from vllm.lora.peft_helper import PEFTHelper
 from vllm.lora.utils import get_adapter_absolute_path
+from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
 from vllm_omni.diffusion.lora.manager import DiffusionLoRAManager, logger
 from vllm_omni.lora.request import LoRARequest as OmniLoRARequest
 
@@ -111,3 +112,7 @@ class VLLMOmniHijack:
             setattr(target_cls, target_method_name, hooking_method)
 
         do_hijack(DiffusionLoRAManager, "_load_adapter", hijack__load_adapter)
+
+        from verl.utils.vllm import VLLMHijack
+
+        VLLMHijack.hijack()

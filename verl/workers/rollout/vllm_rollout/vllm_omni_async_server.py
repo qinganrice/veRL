@@ -81,6 +81,12 @@ class vLLMOmniHttpServer(vLLMHttpServer):
     def _preprocess_engine_kwargs(self, engine_kwargs: dict) -> None:
         # custom_pipeline is passed directly to run_server; not supported via CLI yet
         engine_kwargs.pop("custom_pipeline", None)
+        # vLLM-Omni CLI uses hyphens (--stage-configs-path) but Hydra config
+        # uses underscores.  Rename so build_cli_args_from_config produces the
+        # correct CLI flag.
+        for underscore_key in ("stage_configs_path", "deploy_config", "stage_overrides", "async_chunk"):
+            if underscore_key in engine_kwargs:
+                engine_kwargs[underscore_key.replace("_", "-")] = engine_kwargs.pop(underscore_key)
 
     def _get_worker_extension_cls(self) -> str:
         return "verl.workers.rollout.vllm_rollout.utils.vLLMOmniColocateWorkerExtension"
@@ -98,6 +104,15 @@ class vLLMOmniHttpServer(vLLMHttpServer):
     async def run_server(self, args: argparse.Namespace):
         engine_args = OmniEngineArgs.from_cli_args(args)
         engine_args = asdict(engine_args)
+
+        # asdict() serializes CompilationConfig into a dict with explicit None
+        # values for unset fields.  Pydantic rejects None where it expects a
+        # list (e.g. cudagraph_capture_sizes), so strip Nones and let the
+        # CompilationConfig defaults kick in on re-construction.
+        if isinstance(engine_args.get("compilation_config"), dict):
+            engine_args["compilation_config"] = {
+                k: v for k, v in engine_args["compilation_config"].items() if v is not None
+            }
 
         # TODO (mike): read custom_pipeline from CLI
         custom_pipeline = self.config.engine_kwargs.get("vllm_omni", {}).get("custom_pipeline", None)

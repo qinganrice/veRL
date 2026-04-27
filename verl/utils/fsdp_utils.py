@@ -613,11 +613,15 @@ def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
             "_fsdp_wrapped_module.base_model.model.model.",
             "_fsdp_wrapped_module.base_model.model.model.layers.",
             "_fsdp_wrapped_module.base_model.model.model.language_model.layers.",
+            # fsdp — Qwen3-Omni: layers are under model.model.thinker.model.layers
+            "_fsdp_wrapped_module.base_model.model.model.thinker.model.layers.",
             # fsdp2
             "base_model.model.",
             "base_model.model.model.",
             "base_model.model.model.layers.",
             "base_model.model.model.language_model.layers.",
+            # fsdp2 — Qwen3-Omni
+            "base_model.model.model.thinker.model.layers.",
         ]
     peft_model = getattr(fsdp_module, "_fsdp_wrapped_module", fsdp_module)
     for prefix in prefix_list:
