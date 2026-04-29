@@ -52,13 +52,13 @@ CLIP_RATIO_HIGH="4e-4"
 # freeze_vision_tower freezes audio_tower and visual encoder (no LoRA, no gradient).
 LORA_RANK=64
 LORA_ALPHA=32
-EXCLUDE_MODULES="talker|code2wav|code_predictor"
+EXCLUDE_MODULES=".*talker.*|.*code2wav.*|.*code_predictor.*|.*visual.*|.*audio_tower.*"
 
 # ─── GRPO Sampling ───────────────────────────────────────────────────────
 # Generate N responses per prompt, compute group-relative advantage.
 N_RESP=8                  # 8 responses per prompt (matches Relax config)
 TEMPERATURE=0.8           # Exploration temperature (matches Relax)
-TRAIN_BATCH_SIZE=64       # Prompts per batch
+TRAIN_BATCH_SIZE=32      # Prompts per batch
 
 # ─── Rollout Engine ──────────────────────────────────────────────────────
 # Use vLLM-Omni for inference. The rollout engine will:
@@ -82,7 +82,7 @@ python3 -m verl.trainer.main_ppo \
     data.val_files="${VAL_FILE}" \
     data.train_batch_size=${TRAIN_BATCH_SIZE} \
     data.max_prompt_length=1024 \
-    data.max_response_length=2048 \
+    data.max_response_length=1024 \
     data.filter_overlong_prompts=True \
     data.truncation='left' \
     \
@@ -110,8 +110,8 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
     actor_rollout_ref.actor.optim.weight_decay=0.1 \
     actor_rollout_ref.actor.optim.clip_grad=1.0 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=16 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
@@ -144,18 +144,18 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.top_p=0.9 \
     actor_rollout_ref.rollout.top_k=-1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=${ROLLOUT_TP} \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
-    actor_rollout_ref.rollout.max_num_seqs=64 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.3 \
+    actor_rollout_ref.rollout.max_num_seqs=32 \
     actor_rollout_ref.rollout.calculate_log_probs=True \
     actor_rollout_ref.rollout.load_format=safetensors \
-    actor_rollout_ref.rollout.layered_summon=False \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.rollout.layered_summon=True \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     ++actor_rollout_ref.rollout.engine_kwargs.vllm_omni.stage_configs_path="${STAGE_CONFIG}" \
     \
     `# ═══ Reference Model ═══` \
     `# The frozen reference model computes ref_log_probs for KL penalty.` \
     `# Uses FSDP with param_offload to save GPU memory.` \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.ref.strategy=fsdp \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.ref.fsdp_config.model_dtype=bf16 \

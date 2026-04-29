@@ -696,11 +696,33 @@ try:
     def _qwen3_omni_set_input_embeddings(self, value):
         self.thinker.set_input_embeddings(value)
 
+    def _qwen3_omni_forward(self, input_ids=None, attention_mask=None, position_ids=None,
+                             past_key_values=None, inputs_embeds=None, labels=None,
+                             use_cache=None, output_attentions=None,
+                             output_hidden_states=None, return_dict=None, **kwargs):
+        return self.thinker(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            labels=labels,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            **kwargs,
+        )
+
+    Qwen3OmniMoeForConditionalGeneration.forward = _qwen3_omni_forward
     Qwen3OmniMoeForConditionalGeneration.get_input_embeddings = _qwen3_omni_get_input_embeddings
     Qwen3OmniMoeForConditionalGeneration.set_input_embeddings = _qwen3_omni_set_input_embeddings
     # Fix _no_split_modules: the full model incorrectly lists Qwen3OmniMoeDecoderLayer
     # which doesn't exist; the actual Thinker decoder layer is Qwen3OmniMoeThinkerTextDecoderLayer.
     Qwen3OmniMoeForConditionalGeneration._no_split_modules = ["Qwen3OmniMoeThinkerTextDecoderLayer"]
+    Qwen3OmniMoeForConditionalGeneration._verl_strip_modules = [
+        "talker", "code2wav", "code_predictor",
+    ]
     # Fix tie_word_embeddings: the full model config sets this to True, which forces
     # all FSDP ranks to load on CPU (use_meta_tensor=False) and OOMs during FSDP init.
     # Use a descriptor that returns False but has a no-op setter so config __init__ works.

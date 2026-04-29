@@ -598,6 +598,9 @@ def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
             if name.startswith(prefix) and "." not in name[len(prefix) :]:
                 yield name, submodule
 
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
     lora_params = OrderedDict()
     if is_diffusers:
         prefix_list = [
@@ -614,14 +617,14 @@ def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
             "_fsdp_wrapped_module.base_model.model.model.layers.",
             "_fsdp_wrapped_module.base_model.model.model.language_model.layers.",
             # fsdp — Qwen3-Omni: layers are under model.model.thinker.model.layers
-            "_fsdp_wrapped_module.base_model.model.model.thinker.model.layers.",
+            "_fsdp_wrapped_module.base_model.model.thinker.model.layers.",
             # fsdp2
             "base_model.model.",
             "base_model.model.model.",
             "base_model.model.model.layers.",
             "base_model.model.model.language_model.layers.",
             # fsdp2 — Qwen3-Omni
-            "base_model.model.model.thinker.model.layers.",
+            "base_model.model.thinker.model.layers.",
         ]
     peft_model = getattr(fsdp_module, "_fsdp_wrapped_module", fsdp_module)
     for prefix in prefix_list:
@@ -631,8 +634,11 @@ def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
             else:
                 prefix = name.replace("_fsdp_wrapped_module.base_model.model.", "base_model.model.")
             if name.endswith(".model") or name.endswith(".layers"):
+                _log.info("[layered_summon] SKIP (ends with .model/.layers): %s", name)
                 continue
-            if fsdp_version(submodule) > 0:
+            fv = fsdp_version(submodule)
+            if fv > 0:
+                _log.info("[layered_summon] MATCH prefix=%s name=%s fsdp_ver=%d", prefix, name, fv)
                 with FSDP.summon_full_params(submodule, writeback=False):
                     sub_lora_params = get_peft_model_state_dict(peft_model, state_dict=submodule.state_dict())
                     sub_lora_params = {
@@ -641,9 +647,15 @@ def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
                         else param.detach().cpu()
                         for name, param in sub_lora_params.items()
                     }
+                    _log.info("[layered_summon] collected %d lora params from %s, keys=%s",
+                              len(sub_lora_params), name, list(sub_lora_params.keys())[:3])
                     lora_params.update(sub_lora_params)
                     submodule._is_root = False
                 get_torch_device().empty_cache()
+            else:
+                _log.info("[layered_summon] SKIP (fsdp_ver=0): %s", name)
+    _log.info("[layered_summon] TOTAL lora_params: %d, sample_keys=%s",
+              len(lora_params), list(lora_params.keys())[:5])
     return lora_params
 
 
@@ -666,6 +678,20 @@ def collect_lora_params(
                     "rollout.load_format=safetensors"
                 )
             lora_params = layered_summon_lora_params(module, is_diffusers=is_diffusers)
+            if not lora_params:
+                import logging as _fallback_log
+                _fallback_log.getLogger(__name__).warning(
+                    "layered_summon returned empty — falling back to full summon with offload_to_cpu"
+                )
+                with FSDP.summon_full_params(module, writeback=False, offload_to_cpu=True):
+                    lora_params = get_peft_model_state_dict(peft_model)
+                    lora_params = {
+                        name: param.full_tensor().detach().cpu()
+                        if hasattr(param, "full_tensor")
+                        else param.detach().cpu()
+                        for name, param in lora_params.items()
+                    }
+                get_torch_device().empty_cache()
         else:
             with FSDP.summon_full_params(module, writeback=False):
                 if base_sync_done:
