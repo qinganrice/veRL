@@ -107,7 +107,12 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=False):
     from torch.distributed.fsdp.wrap import _or_policy, lambda_auto_wrap_policy
 
     # Add lambda policy for LoRA modules if is_lora is True
-    if is_lora:
+    # Skip lambda policy when min_num_params > 0: the size policy already
+    # controls wrapping granularity.  Combining both creates nested FSDP
+    # units (LoRA leaves inside decoder-layer units) whose allgather order
+    # can diverge across ranks when input lengths differ (use_remove_padding),
+    # causing NCCL deadlocks.
+    if is_lora and min_num_params == 0:
 
         def lambda_policy_fn(module):
             return bool(

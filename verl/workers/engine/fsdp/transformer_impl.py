@@ -331,6 +331,14 @@ class FSDPEngine(BaseEngine):
                 "bias": "none",
             }
             module = get_peft_model(module, LoraConfig(**lora_config))
+  
+        # Cast LoRA params to match base model dtype so FSDP can flatten
+        # all params in the same unit into a single contiguous tensor.
+        base_dtype = next((p.dtype for p in module.parameters() if not p.requires_grad), None)
+        if base_dtype is not None:
+            for param in module.parameters():
+                if param.requires_grad and param.dtype != base_dtype:
+                    param.data = param.data.to(base_dtype)
 
         return module
 

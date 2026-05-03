@@ -18,17 +18,22 @@
 # =============================================================================
 set -x
 
+# ─── NCCL Diagnostics ───────────────────────────────────────────────────
+export TORCH_NCCL_TRACE_BUFFER_SIZE=1000
+
 # ─── Model ───────────────────────────────────────────────────────────────
 # Qwen3-Omni-30B-A3B is an MoE model (30B total, 3B active per token).
 # The actor loads the FULL model via transformers (Thinker+Talker+Code2Wav)
 # but LoRA only targets Thinker layers, so Talker/Code2Wav are frozen.
-MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen3-Omni-30B-A3B-Instruct"}
+# MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen3-Omni-30B-A3B-Instruct"}
+MODEL_PATH=/home/qa4/.cache/huggingface/hub/Qwen3-Omni-MoE-tiny
+
 
 # ─── Data ────────────────────────────────────────────────────────────────
 # Start with GSM8K (text-only math) for simplest e2e validation.
 # Switch to AVQA later for multimodal (audio+image) training.
-TRAIN_FILE=${TRAIN_FILE:-"$HOME/data/gsm8k/train.parquet"}
-VAL_FILE=${VAL_FILE:-"$HOME/data/gsm8k/test.parquet"}
+TRAIN_FILE=${TRAIN_FILE:-"$HOME/data/gsm8k_nothink/train.parquet"}
+VAL_FILE=${VAL_FILE:-"$HOME/data/gsm8k_nothink/test.parquet"}
 
 # ─── Algorithm ───────────────────────────────────────────────────────────
 # GSPO = GRPO advantage estimation + sequence-level policy loss.
@@ -58,7 +63,7 @@ EXCLUDE_MODULES=".*talker.*|.*code2wav.*|.*code_predictor.*|.*visual.*|.*audio_t
 # Generate N responses per prompt, compute group-relative advantage.
 N_RESP=8                  # 8 responses per prompt (matches Relax config)
 TEMPERATURE=0.8           # Exploration temperature (matches Relax)
-TRAIN_BATCH_SIZE=32      # Prompts per batch
+TRAIN_BATCH_SIZE=8      # Prompts per batch
 
 # ─── Rollout Engine ──────────────────────────────────────────────────────
 # Use vLLM-Omni for inference. The rollout engine will:
@@ -82,7 +87,7 @@ python3 -m verl.trainer.main_ppo \
     data.val_files="${VAL_FILE}" \
     data.train_batch_size=${TRAIN_BATCH_SIZE} \
     data.max_prompt_length=1024 \
-    data.max_response_length=1024 \
+    data.max_response_length=2048 \
     data.filter_overlong_prompts=True \
     data.truncation='left' \
     \
@@ -111,16 +116,17 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.weight_decay=0.1 \
     actor_rollout_ref.actor.optim.clip_grad=1.0 \
     actor_rollout_ref.actor.ppo_mini_batch_size=8 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.actor.strategy=fsdp \
-    actor_rollout_ref.actor.fsdp_config.param_offload=True \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
     actor_rollout_ref.actor.fsdp_config.use_orig_params=True \
+    actor_rollout_ref.actor.fsdp_config.wrap_policy.min_num_params=100000000 \
     \
     `# ═══ GSPO-Specific Loss Configuration ═══` \
     `# loss_mode=gspo: use sequence-level importance ratio (not per-token)` \
@@ -144,22 +150,23 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.top_p=0.9 \
     actor_rollout_ref.rollout.top_k=-1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=${ROLLOUT_TP} \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.3 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.1 \
     actor_rollout_ref.rollout.max_num_seqs=32 \
     actor_rollout_ref.rollout.calculate_log_probs=True \
     actor_rollout_ref.rollout.load_format=safetensors \
     actor_rollout_ref.rollout.layered_summon=True \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     ++actor_rollout_ref.rollout.engine_kwargs.vllm_omni.stage_configs_path="${STAGE_CONFIG}" \
     \
     `# ═══ Reference Model ═══` \
     `# The frozen reference model computes ref_log_probs for KL penalty.` \
     `# Uses FSDP with param_offload to save GPU memory.` \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.ref.strategy=fsdp \
-    actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    actor_rollout_ref.ref.fsdp_config.param_offload=False \
     actor_rollout_ref.ref.fsdp_config.model_dtype=bf16 \
     actor_rollout_ref.ref.fsdp_config.use_orig_params=True \
+    actor_rollout_ref.ref.fsdp_config.wrap_policy.min_num_params=100000000 \
     \
     `# ═══ Algorithm Configuration ═══` \
     `# adv_estimator=grpo: group-relative advantage (no critic)` \
