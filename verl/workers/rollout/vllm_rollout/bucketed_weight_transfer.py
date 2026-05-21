@@ -113,11 +113,33 @@ class BucketedWeightSender:
             self._init_socket()
             self._init_buffer()
 
+            # === DIAGNOSTIC: count what flows through the sender ===
+            _sent_count = 0
+            _bucket_count = 0
+            _direct_large_count = 0
+            _seen_names: dict[str, int] = {}  # detect dup names
+            _last_missing_check_name = (
+                "thinker.model.layers.15.mlp.experts.28.down_proj.lora_B"
+            )
+            _saw_target = False
+            # === END DIAGNOSTIC ===
+
             # send bucket weights
             offset = 0
             bucket_meta: dict[str, TensorMetadata] = {}
             # dtype = PrecisionType.to_dtype(self.config.dtype)
             async for name, weight in ensure_async_iterator(weights):
+                # === DIAGNOSTIC: trace this tensor's progress ===
+                _sent_count += 1
+                _seen_names[name] = _seen_names.get(name, 0) + 1
+                if "experts.28.down_proj.lora_B" in name and "layers.15" in name:
+                    _saw_target = True
+                    logger.warning(
+                        "[sender dump] saw target tensor #%d: name=%r shape=%s nbytes=%d offset=%d",
+                        _sent_count, name, tuple(weight.shape), weight.nbytes, offset,
+                    )
+                # === END DIAGNOSTIC ===
+
                 # model parameters are in fp32 full precision
                 # (vermouth1992) we should not force cast weight here because some parameters
                 # (such as moe gate) have to keep fp32 precision. If a weight is bf16 in the rollout side,
@@ -130,6 +152,11 @@ class BucketedWeightSender:
                     get_torch_device().synchronize()
                     self.socket.send_pyobj({"bucket_meta": bucket_meta, "is_last": False})
                     self.socket.recv()
+                    _bucket_count += 1
+                    logger.warning(
+                        "[sender dump] flushed bucket #%d with %d tensors (cumulative sent=%d)",
+                        _bucket_count, len(bucket_meta), _sent_count - 1,
+                    )
                     bucket_meta = {}
                     offset = 0
 
@@ -137,6 +164,11 @@ class BucketedWeightSender:
                     assert not self.use_shm, (
                         f"Weight {name}({weight.shape}, {weight.dtype}) is too large to fit in the bucket."
                         f"Please increase rollout.update_weights_bucket_megabytes({self.bucket_size_mb} MB)."
+                    )
+                    _direct_large_count += 1
+                    logger.warning(
+                        "[sender dump] direct-send large tensor #%d: name=%r nbytes=%d",
+                        _direct_large_count, name, weight.nbytes,
                     )
                     self._direct_send_large_weight(name, weight)
                     continue
@@ -155,6 +187,22 @@ class BucketedWeightSender:
             get_torch_device().synchronize()
             self.socket.send_pyobj({"bucket_meta": bucket_meta, "is_last": True})
             self.socket.recv()
+            _bucket_count += 1
+
+            # === DIAGNOSTIC summary ===
+            dups = {n: c for n, c in _seen_names.items() if c > 1}
+            logger.warning(
+                "[sender dump] FINAL: sent_count=%d unique_names=%d duplicate_names=%d "
+                "buckets=%d direct_large=%d saw_target_(15,28,down_B)=%s last_bucket_size=%d",
+                _sent_count, len(_seen_names), len(dups),
+                _bucket_count, _direct_large_count, _saw_target, len(bucket_meta),
+            )
+            if dups:
+                logger.warning(
+                    "[sender dump] duplicate names sample (first 5): %s",
+                    list(dups.items())[:5],
+                )
+            # === END DIAGNOSTIC ===
         finally:
             self._cleanup()
 
