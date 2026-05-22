@@ -626,6 +626,69 @@ def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
             "base_model.model.model.language_model.layers.",
             "base_model.model.thinker.model.layers.",
         ]
+
+    # === ONE-SHOT DIAGNOSTIC: dump real structure so we can fix prefix_list ===
+    # Only runs the first time per process. Detects why prefix_list doesn't match.
+    if not getattr(layered_summon_lora_params, "_diag_done", False):
+        try:
+            import logging
+            _log = logging.getLogger(__name__)
+            all_named = list(fsdp_module.named_modules())
+            fsdp_units = [(n, type(m).__name__) for n, m in all_named if fsdp_version(m) > 0]
+
+            _log.warning(
+                "[summon diag] one-shot dump: total_modules=%d, fsdp_units_total=%d",
+                len(all_named), len(fsdp_units),
+            )
+            _log.warning(
+                "[summon diag] fsdp_units sample (first 8): %s",
+                fsdp_units[:8],
+            )
+
+            # Per-prefix breakdown: name_hits vs fsdp_hits
+            for p in prefix_list:
+                name_hits = [n for n, _ in all_named
+                             if n.startswith(p) and "." not in n[len(p):]]
+                fsdp_hits = [n for n, m in all_named
+                             if n.startswith(p) and "." not in n[len(p):]
+                             and fsdp_version(m) > 0]
+                _log.warning(
+                    "[summon diag] prefix=%r  name_hits=%d  fsdp_hits=%d",
+                    p, len(name_hits), len(fsdp_hits),
+                )
+                if name_hits and not fsdp_hits:
+                    _log.warning(
+                        "[summon diag]   ^ matched names but none are FSDP units; "
+                        "sample: %s", name_hits[:3]
+                    )
+
+            # Suggest candidate prefixes by scanning paths with 'thinker' and 'layers.<int>'
+            candidates: set[str] = set()
+            for n, m in all_named:
+                if fsdp_version(m) > 0 and "thinker" in n and ".layers." in n:
+                    last_dot = n.rfind(".")
+                    if last_dot > 0:
+                        suffix = n[last_dot + 1 :]
+                        if suffix.isdigit():
+                            candidates.add(n[: last_dot + 1])
+            if candidates:
+                _log.warning(
+                    "[summon diag] candidate prefix(es) from real module names: %s",
+                    sorted(candidates),
+                )
+            else:
+                _log.warning(
+                    "[summon diag] no FSDP unit found at any 'thinker...layers.<int>' path; "
+                    "sample modules containing 'thinker' (first 8): %s",
+                    [n for n, _ in all_named if "thinker" in n][:8],
+                )
+        except Exception as _diag_e:
+            import logging
+            logging.getLogger(__name__).warning("[summon diag] skipped: %s", _diag_e)
+        finally:
+            layered_summon_lora_params._diag_done = True
+    # === END ONE-SHOT DIAGNOSTIC ===
+
     peft_model = getattr(fsdp_module, "_fsdp_wrapped_module", fsdp_module)
     for prefix in prefix_list:
         for name, submodule in __prefix_submodules(fsdp_module, prefix):
