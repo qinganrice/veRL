@@ -328,19 +328,7 @@ class BucketedWeightReceiver:
                         weights.append((name, tensor))
                         continue
                     size = dtype.itemsize * shape.numel()
-                    # NOTE: clone() is required, NOT a view.
-                    # The buffer is reused across buckets — once we ACK below,
-                    # the sender starts overwriting it with the next bucket's
-                    # data. If `tensor` were a view into the buffer, by the
-                    # time downstream code (e.g. vllm pack_moe) actually reads
-                    # the data, it has been corrupted by the next bucket's
-                    # write. Empirically this manifested as a single specific
-                    # MoE expert LoRA (e.g. layer 15 / expert 28 / down_B)
-                    # being dropped, triggering vllm's
-                    # `assert w1_lora is not None` in pack_moe.
-                    # clone() forces a real copy on the receiver side so the
-                    # downstream code owns memory independent of the buffer.
-                    tensor = self.buffer[offset : offset + size].view(dtype=dtype).view(shape).clone()
+                    tensor = self.buffer[offset : offset + size].view(dtype=dtype).view(shape)
                     if self.use_shm:
                         tensor = tensor.to(self.device)
                     weights.append((name, tensor))
