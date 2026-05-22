@@ -246,12 +246,7 @@ def convert_weight_keys(state_dict: dict[str, torch.Tensor], model: PreTrainedMo
 
     reverse_key_mapping = {v: k for k, v in model._checkpoint_conversion_mapping.items()}
     original_weights = {}
-    # === DIAGNOSTIC: detect key collisions caused by regex collapse ===
-    _collisions: list[tuple[str, str]] = []
-    _input_count = len(state_dict)
-    # === END DIAGNOSTIC ===
     for key, value in state_dict.items():
-        original_input_key = key
         for pattern, replacement in reverse_key_mapping.items():
             replacement = replacement.lstrip("^")  # strip off un-needed chars and patterns
             replacement = re.sub(r"\(.*\)", "", replacement)
@@ -260,27 +255,7 @@ def convert_weight_keys(state_dict: dict[str, torch.Tensor], model: PreTrainedMo
             if n_replace > 0:
                 break
 
-        # === DIAGNOSTIC: record collisions before overwrite ===
-        if key in original_weights:
-            _collisions.append((original_input_key, key))
-        # === END DIAGNOSTIC ===
-
         original_weights[key] = value
-
-    # === DIAGNOSTIC: report any drops ===
-    if _collisions or len(original_weights) != _input_count:
-        import logging
-        _log = logging.getLogger(__name__)
-        _log.warning(
-            "[convert_weight_keys dump] input=%d output=%d collisions=%d",
-            _input_count, len(original_weights), len(_collisions),
-        )
-        if _collisions:
-            _log.warning(
-                "[convert_weight_keys dump] collision sample (first 10): %s",
-                _collisions[:10],
-            )
-    # === END DIAGNOSTIC ===
 
     return original_weights
 

@@ -722,59 +722,6 @@ def collect_lora_params(
                 name = name.replace("_fsdp_wrapped_module.", "").replace(".base_layer", "")
                 lora_params[name] = param.detach().cpu()
             model = model.to(orig_dev)
-
-    # === DIAGNOSTIC DUMP: check MoE expert LoRA pairing ===
-    # Triggered for debugging vllm pack_moe AssertionError on full Qwen3-Omni
-    # (assert w1_lora is not None at vllm/lora/lora_weights.py:187 pack_moe).
-    # Dumps which experts are missing which projection LoRA pairs.
-    try:
-        import os, re
-        from collections import defaultdict
-        import logging
-        _log = logging.getLogger(__name__)
-
-        keys = list(lora_params.keys())
-        # Group by (layer, expert_id) → set of (proj, ab) we observed
-        per_expert = defaultdict(set)            # (layer, expert_id) -> {(proj, AB)}
-        non_expert_count = 0
-        for k in keys:
-            m = re.search(r"layers\.(\d+)\..*experts\.(\d+)\.(\w+?)_proj\.lora_([AB])", k)
-            if m:
-                layer, eid, proj, ab = m.group(1), m.group(2), m.group(3), m.group(4)
-                per_expert[(layer, eid)].add((proj, ab))
-            else:
-                non_expert_count += 1
-
-        if per_expert:
-            need = {(p, ab) for p in ("gate", "up", "down") for ab in ("A", "B")}
-            incomplete = {k: sorted(need - v) for k, v in per_expert.items() if v != need}
-            _log.warning(
-                "[lora collect dump] total_keys=%d, non_expert_keys=%d, "
-                "experts_seen=%d, experts_incomplete=%d",
-                len(keys), non_expert_count, len(per_expert), len(incomplete),
-            )
-            if incomplete:
-                sample = list(incomplete.items())[:10]
-                _log.warning("[lora collect dump] incomplete sample (first 10): %s", sample)
-                # Aggregate which (proj, AB) is most commonly missing
-                miss_count = defaultdict(int)
-                for missing in incomplete.values():
-                    for entry in missing:
-                        miss_count[entry] += 1
-                _log.warning("[lora collect dump] missing-by-proj-ab counts: %s",
-                             dict(miss_count))
-        else:
-            _log.warning("[lora collect dump] no MoE expert LoRA keys matched "
-                         "the regex; total_keys=%d, sample_keys=%s",
-                         len(keys), keys[:5])
-    except Exception as _diag_e:
-        # Diagnostic must NOT break weight sync if regex/logic fails
-        import logging
-        logging.getLogger(__name__).warning(
-            "[lora collect dump] diagnostic skipped due to: %s", _diag_e
-        )
-    # === END DIAGNOSTIC ===
-
     return lora_params
 
 
