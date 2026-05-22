@@ -596,120 +596,72 @@ def fsdp2_clip_grad_norm_(parameters, max_norm, norm_type=2.0, error_if_nonfinit
 
 
 def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
+    """Collect LoRA params one FSDP unit at a time to keep peak GPU memory low.
+
+    Implementation iterates every FSDP unit in the tree (depth-first, parent
+    before child) and summons each unit individually. The prior prefix-list
+    based approach assumed FSDP wrap landed at the transformer-layer level —
+    on MoE models where wrap typically lands at ``layers.<i>.mlp`` (because
+    each MoE MLP exceeds ``min_num_params`` while attention does not), the
+    layer-level prefix matched names that were NOT FSDP units (``fsdp_hits=0``),
+    so the function returned empty and fell back to a single full summon.
+
+    Direct iteration works for any wrap granularity (layer, MLP, expert) and
+    any model architecture (dense, MoE, omni-modality) without needing to
+    maintain a per-architecture prefix list.
+
+    Why this is safe with nested FSDP units:
+        ``submodule.state_dict()`` returns gathered tensors for the unit being
+        summoned but only sharded tensors for nested child FSDP units. Because
+        ``named_modules()`` yields parent-then-child, any LoRA tensor that
+        first appears as a sharded entry under a parent summon gets
+        OVERWRITTEN later by the proper gather when its own FSDP unit is
+        visited. End result: every LoRA tensor is correctly gathered exactly
+        once by the time the function returns.
+    """
     from peft.utils.save_and_load import get_peft_model_state_dict
 
-    def __prefix_submodules(module, prefix):
-        for name, submodule in module.named_modules():
-            if name.startswith(prefix) and "." not in name[len(prefix) :]:
-                yield name, submodule
-
     lora_params = OrderedDict()
-    if is_diffusers:
-        prefix_list = [
-            # fsdp
-            "_fsdp_wrapped_module.transformer_blocks.",
-            # fsdp2
-            "transformer_blocks.",
-        ]
-    else:
-        prefix_list = [
-            # fsdp
-            "_fsdp_wrapped_module.base_model.model.",
-            "_fsdp_wrapped_module.base_model.model.model.",
-            "_fsdp_wrapped_module.base_model.model.model.layers.",
-            "_fsdp_wrapped_module.base_model.model.model.language_model.layers.",
-            "_fsdp_wrapped_module.base_model.model.thinker.model.layers.",
-            # fsdp2
-            "base_model.model.",
-            "base_model.model.model.",
-            "base_model.model.model.layers.",
-            "base_model.model.model.language_model.layers.",
-            "base_model.model.thinker.model.layers.",
-        ]
-
-    # === ONE-SHOT DIAGNOSTIC: dump real structure so we can fix prefix_list ===
-    # Only runs the first time per process. Detects why prefix_list doesn't match.
-    if not getattr(layered_summon_lora_params, "_diag_done", False):
-        try:
-            import logging
-            _log = logging.getLogger(__name__)
-            all_named = list(fsdp_module.named_modules())
-            fsdp_units = [(n, type(m).__name__) for n, m in all_named if fsdp_version(m) > 0]
-
-            _log.warning(
-                "[summon diag] one-shot dump: total_modules=%d, fsdp_units_total=%d",
-                len(all_named), len(fsdp_units),
-            )
-            _log.warning(
-                "[summon diag] fsdp_units sample (first 8): %s",
-                fsdp_units[:8],
-            )
-
-            # Per-prefix breakdown: name_hits vs fsdp_hits
-            for p in prefix_list:
-                name_hits = [n for n, _ in all_named
-                             if n.startswith(p) and "." not in n[len(p):]]
-                fsdp_hits = [n for n, m in all_named
-                             if n.startswith(p) and "." not in n[len(p):]
-                             and fsdp_version(m) > 0]
-                _log.warning(
-                    "[summon diag] prefix=%r  name_hits=%d  fsdp_hits=%d",
-                    p, len(name_hits), len(fsdp_hits),
-                )
-                if name_hits and not fsdp_hits:
-                    _log.warning(
-                        "[summon diag]   ^ matched names but none are FSDP units; "
-                        "sample: %s", name_hits[:3]
-                    )
-
-            # Suggest candidate prefixes by scanning paths with 'thinker' and 'layers.<int>'
-            candidates: set[str] = set()
-            for n, m in all_named:
-                if fsdp_version(m) > 0 and "thinker" in n and ".layers." in n:
-                    last_dot = n.rfind(".")
-                    if last_dot > 0:
-                        suffix = n[last_dot + 1 :]
-                        if suffix.isdigit():
-                            candidates.add(n[: last_dot + 1])
-            if candidates:
-                _log.warning(
-                    "[summon diag] candidate prefix(es) from real module names: %s",
-                    sorted(candidates),
-                )
-            else:
-                _log.warning(
-                    "[summon diag] no FSDP unit found at any 'thinker...layers.<int>' path; "
-                    "sample modules containing 'thinker' (first 8): %s",
-                    [n for n, _ in all_named if "thinker" in n][:8],
-                )
-        except Exception as _diag_e:
-            import logging
-            logging.getLogger(__name__).warning("[summon diag] skipped: %s", _diag_e)
-        finally:
-            layered_summon_lora_params._diag_done = True
-    # === END ONE-SHOT DIAGNOSTIC ===
-
     peft_model = getattr(fsdp_module, "_fsdp_wrapped_module", fsdp_module)
-    for prefix in prefix_list:
-        for name, submodule in __prefix_submodules(fsdp_module, prefix):
-            if is_diffusers:
-                prefix = name.replace("_fsdp_wrapped_module.", "")
-            else:
-                prefix = name.replace("_fsdp_wrapped_module.base_model.model.", "base_model.model.")
-            if name.endswith(".model") or name.endswith(".layers"):
+
+    for name, submodule in fsdp_module.named_modules():
+        if name == "":
+            # Skip the outermost FSDP unit — summoning it is equivalent to a
+            # full summon of the entire model, defeating the "layered" goal.
+            continue
+        if fsdp_version(submodule) == 0:
+            # Not an FSDP unit; nothing to summon. Its params are managed by
+            # whichever ancestor FSDP unit wraps it and are gathered there.
+            continue
+
+        # Strip every ``_fsdp_wrapped_module.`` indirection to build the path
+        # that downstream consumers (vllm LoRA loader, peft state_dict keys)
+        # expect. The wrapper segment can appear multiple times (e.g. nested
+        # FSDP: ``...thinker.model._fsdp_wrapped_module.layers.0.mlp``).
+        clean_prefix = name.replace("_fsdp_wrapped_module.", "")
+        if clean_prefix.endswith(".model") or clean_prefix.endswith(".layers"):
+            # Bare container modules (e.g. nn.ModuleList wrappers). Their own
+            # params are typically empty; meaningful params live in children.
+            continue
+
+        with FSDP.summon_full_params(submodule, writeback=False):
+            sub_lora_params = get_peft_model_state_dict(
+                peft_model, state_dict=submodule.state_dict()
+            )
+            if not sub_lora_params:
                 continue
-            if fsdp_version(submodule) > 0:
-                with FSDP.summon_full_params(submodule, writeback=False):
-                    sub_lora_params = get_peft_model_state_dict(peft_model, state_dict=submodule.state_dict())
-                    sub_lora_params = {
-                        f"{prefix}.{name}": param.full_tensor().detach().cpu()
-                        if hasattr(param, "full_tensor")
-                        else param.detach().cpu()
-                        for name, param in sub_lora_params.items()
-                    }
-                    lora_params.update(sub_lora_params)
-                    submodule._is_root = False
-                get_torch_device().empty_cache()
+            sub_lora_params = {
+                f"{clean_prefix}.{key}": (
+                    param.full_tensor().detach().cpu()
+                    if hasattr(param, "full_tensor")
+                    else param.detach().cpu()
+                )
+                for key, param in sub_lora_params.items()
+            }
+            lora_params.update(sub_lora_params)
+            submodule._is_root = False
+        get_torch_device().empty_cache()
+
     return lora_params
 
 
