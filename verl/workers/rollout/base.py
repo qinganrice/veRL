@@ -87,6 +87,11 @@ _ROLLOUT_REGISTRY = {
 }
 
 
+def register_rollout_adapter(name: str, mode: str, fqdn: str) -> None:
+    """Register a custom rollout server adapter."""
+    _ROLLOUT_REGISTRY[(name, mode)] = fqdn
+
+
 def get_rollout_class(rollout_name: str, mode: str = "async") -> type[BaseRollout]:
     """Get the rollout class by name.
 

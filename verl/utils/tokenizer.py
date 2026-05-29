@@ -179,6 +179,17 @@ def hf_tokenizer(name_or_path, correct_pad_token=True, correct_gemma2=True, **kw
     return tokenizer
 
 
+_PROCESSOR_REGISTRY: dict = {}
+
+
+def register_processor_handler(processor_class_name: str, handler) -> None:
+    """Register a handler for a custom processor type.
+
+    handler(name_or_path, processor, config, **kwargs) -> processor with bound methods.
+    """
+    _PROCESSOR_REGISTRY[processor_class_name] = handler
+
+
 def hf_processor(name_or_path, **kwargs):
     """Create a huggingface processor to process multimodal data.
 
@@ -225,6 +236,10 @@ def hf_processor(name_or_path, **kwargs):
             case "MllamaProcessor":
                 pass  # MllamaProcessor and MllamaModel doesn't have get_rope_index property
             case _:
+                if processor.__class__.__name__ in _PROCESSOR_REGISTRY:
+                    return _PROCESSOR_REGISTRY[processor.__class__.__name__](
+                        name_or_path, processor, config, **kwargs
+                    )
                 raise ValueError(f"Unsupported processor type: {processor.__class__.__name__}")
 
         if model_class is not None:

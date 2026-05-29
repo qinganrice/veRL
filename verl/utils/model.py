@@ -683,6 +683,11 @@ _architecture_to_auto_class = {
 }
 
 
+def register_model_architecture(arch_name: str, auto_class) -> None:
+    """Register a custom architecture name → AutoModel class mapping."""
+    _architecture_to_auto_class[arch_name] = auto_class
+
+
 def get_hf_auto_model_class(hf_config):
     has_remote_code = hasattr(hf_config, "auto_map") and any(
         hf_config.architectures[0] in val for val in hf_config.auto_map.values()

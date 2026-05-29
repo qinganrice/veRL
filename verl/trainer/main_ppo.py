@@ -60,6 +60,14 @@ def run_ppo(config, task_runner_class=None) -> None:
     """
     # Check if Ray is not initialized
     if not ray.is_initialized():
+        # Load plugins before ray.init so their patches run in the main process first.
+        # Each plugin's _init_worker is registered as the worker_process_setup_hook so
+        # Ray worker processes also import the plugin and pick up all registrations.
+        for plugin in getattr(config, "plugins", []):
+            import importlib
+            importlib.import_module(plugin)
+            runtime_env_kwargs.setdefault("worker_process_setup_hook", f"{plugin}._init_worker")
+
         # Initialize Ray with a local cluster configuration
         # Set environment variables in the runtime environment to control tokenizer parallelism,
         # NCCL debug level, VLLM logging level, and allow runtime LoRA updating
