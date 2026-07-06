@@ -112,6 +112,14 @@ def calculate_debug_metrics(data: DataProto) -> dict:
 
     pearson_corrcoef = pearson_correlation_coefficient(actor_probs, rollout_probs, response_mask_bool)
     rollout_probs_diff = calculate_log_prob_diff(actor_probs, rollout_probs, response_mask_bool)
+    # TEMP diagnostic: dump per-token actor vs rollout logprob for first rows to see shift vs scale.
+    import sys as _S
+    _resp = responses[0].tolist()
+    _m = response_mask_bool[0].tolist()
+    _al = actor_old_log_probs[0].tolist()
+    _rl = rollout_old_log_probs[0].tolist()
+    _rows = [(t, round(a, 3), round(r, 3)) for t, a, r, k in zip(_resp, _al, _rl, _m) if k][:12]
+    print(f"[PEARSON-TRACE] corr={float(pearson_corrcoef):.3f} rows(tok,actor_lp,rollout_lp)={_rows}", file=_S.stderr, flush=True)
     return {
         "training/rollout_probs_diff_valid": 1,
         "training/rollout_probs_diff_max": torch.max(rollout_probs_diff).detach().item(),
