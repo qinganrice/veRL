@@ -934,7 +934,7 @@ class AgentLoopWorker:
         # TEMP diagnostic: actor-side prompt signature to compare against vLLM MM-TRACE exit.
         import sys as _S
         _ids = input_ids[0].tolist()
-        print(f"[ACTOR-TRACE] vstart={_ids.count(151652)} vend={_ids.count(151653)} img_pad={_ids.count(151655)} len={len(_ids)} vis_pos_span=[{int(vision_position_ids.min())},{int(vision_position_ids.max())}]", file=_S.stderr, flush=True)
+        print(f"[ACTOR-TRACE] vstart={_ids.count(151652)} vend={_ids.count(151653)} img_pad={_ids.count(151655)} len={len(_ids)} vis_pos_span=[{int(vision_position_ids.min())},{int(vision_position_ids.max())}] head={_ids[:12]} tail={_ids[-12:]}", file=_S.stderr, flush=True)
         return position_ids
 
     async def _compute_score(self, outputs: list[AgentLoopOutput], kwargs: dict) -> None:
