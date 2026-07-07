@@ -937,7 +937,10 @@ class AgentLoopWorker:
         _pad_cols = [i for i, t in enumerate(_ids) if t == 151655]
         _vp = vision_position_ids[0]
         _vis = _vp[:, _pad_cols] if _pad_cols else _vp[:, :0]
-        print(f"[ACTOR-TRACE] vstart={_ids.count(151652)} vend={_ids.count(151653)} img_pad={_ids.count(151655)} len={len(_ids)} pad_pos_span=[{int(_vis.min()) if _pad_cols else -1},{int(_vis.max()) if _pad_cols else -1}] full_span=[{int(_vp.min())},{int(_vp.max())}] head={_ids[:12]} tail={_ids[-12:]}", file=_S.stderr, flush=True)
+        _rs = [int(_vis[r].sum()) for r in range(3)] if _pad_cols else []
+        _h3 = [tuple(int(_vis[r, c]) for r in range(3)) for c in range(min(3, len(_pad_cols)))]
+        _t3 = [tuple(int(_vis[r, c]) for r in range(3)) for c in range(max(0, len(_pad_cols) - 3), len(_pad_cols))]
+        print(f"[ACTOR-TRACE] vstart={_ids.count(151652)} vend={_ids.count(151653)} img_pad={_ids.count(151655)} len={len(_ids)} vis_pos_span=[{int(_vis.min()) if _pad_cols else -1},{int(_vis.max()) if _pad_cols else -1}] rowsum={_rs} head3={_h3} tail3={_t3}", file=_S.stderr, flush=True)
         return position_ids
 
     async def _compute_score(self, outputs: list[AgentLoopOutput], kwargs: dict) -> None:
