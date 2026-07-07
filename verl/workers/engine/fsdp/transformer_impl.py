@@ -1086,6 +1086,15 @@ class FSDPEngineWithLMHead(FSDPEngine):
         model_inputs.update(multi_modal_inputs)
         model_inputs.update(extra_args)
 
+        # TEMP diagnostic: verify image features reach actor forward and match image_pad count.
+        import sys as _S
+        _ii = model_inputs["input_ids"]
+        _npad = int((_ii == 151655).sum())
+        _gt = multi_modal_inputs.get("image_grid_thw")
+        _pv = multi_modal_inputs.get("pixel_values")
+        _pos = model_inputs.get("position_ids")
+        print(f"[FWD-TRACE] input_ids={tuple(_ii.shape)} img_pad={_npad} grid_thw={None if _gt is None else _gt.tolist()} pixel_values={None if _pv is None else tuple(_pv.shape)} pos_shape={None if _pos is None else tuple(_pos.shape)} mm_keys={list(multi_modal_inputs.keys())}", file=_S.stderr, flush=True)
+
         return model_inputs, output_args
 
     def prepare_model_outputs(self, output, output_args, micro_batch: TensorDict, logits_processor_func):
